@@ -1,0 +1,2778 @@
+```html
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>สู้เว้ย! — Zombie Runner</title>
+
+<style>
+*{
+  box-sizing:border-box;
+  margin:0;
+  padding:0;
+}
+
+body{
+  background:#080b12;
+  color:white;
+  font-family:Arial,"Tahoma",sans-serif;
+  overflow:hidden;
+  user-select:none;
+}
+
+#wrap{
+  width:100vw;
+  height:100vh;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+}
+
+canvas{
+  width:min(100vw,1000px);
+  height:auto;
+  max-height:100vh;
+  background:#111;
+  border:2px solid #26354d;
+  box-shadow:0 0 40px rgba(0,0,0,.8);
+}
+</style>
+</head>
+
+<body>
+
+<div id="wrap">
+<canvas id="game" width="1000" height="600"></canvas>
+</div>
+
+<script>
+"use strict";
+
+/* =========================================================
+   สู้เว้ย! — ZOMBIE RUNNER
+   HTML + JavaScript ไฟล์เดียว
+========================================================= */
+
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+
+const W=canvas.width;
+const H=canvas.height;
+const G=520;
+
+const rnd=(a,b)=>Math.random()*(b-a)+a;
+const rndi=(a,b)=>Math.floor(rnd(a,b+1));
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const dist=(a,b,c,d)=>Math.hypot(a-c,b-d);
+
+let keys={};
+
+document.addEventListener("keydown",e=>{
+  keys[e.key.toLowerCase()]=true;
+
+  if(
+    [" ","arrowup","arrowdown","arrowleft","arrowright"].includes(e.key.toLowerCase())
+  ){
+    e.preventDefault();
+  }
+
+  const k=e.key.toLowerCase();
+
+  /* START MENU / DIFFICULTY */
+  if(!started){
+    if(k==="1") difficulty="easy";
+    if(k==="2") difficulty="normal";
+    if(k==="enter" || k===" "){
+      started=true;
+      resetGame();
+    }
+    return;
+  }
+
+  if(!started) return;
+
+  /* GAME */
+  if(k==="p"){
+    paused=!paused;
+  }
+
+  if(k==="r" && gameOver){
+    started=false;
+    resetGame();
+  }
+
+  if(k==="b" && !gameOver){
+    shop=!shop;
+  }
+
+  if(k==="e" && !gameOver && !shop){
+    useSkill();
+  }
+
+  if(k==="1" && shop) buyWeapon("pistol");
+  if(k==="2" && shop) buyWeapon("shotgun");
+  if(k==="3" && shop) buyWeapon("rifle");
+  if(k==="4" && shop) buyWeapon("rocket");
+
+  if(k==="h" && shop) buyHP();
+
+  if(k==="escape"){
+    shop=false;
+    paused=false;
+  }
+});
+
+document.addEventListener("keyup",e=>{
+  keys[e.key.toLowerCase()]=false;
+});
+
+
+/* =========================================================
+   GAME STATE
+========================================================= */
+
+let started=false;
+let difficulty="easy"; // easy / normal
+let paused=false;
+let shop=false;
+let gameOver=false;
+
+let score=0;
+let coins=0;
+let kills=0;
+let bossKills=0;
+let level=1;
+
+let hp=100;
+let maxhp=100;
+
+let speed=4;
+let time=0;
+
+let combo=0;
+let comboTimer=0;
+let bestCombo=0;
+
+let skillCooldown=0;
+
+let highScore=Number(localStorage.getItem("suwoei_highscore")||0);
+
+let weapon="pistol";
+
+let owned={
+  pistol:true,
+  shotgun:false,
+  rifle:false,
+  rocket:false
+};
+
+let boss=null;
+
+let zombies=[];
+let obstacles=[];
+let bullets=[];
+let enemyBullets=[];
+let pickups=[];
+let effects=[];
+
+let zombieTimer=0;
+let obstacleTimer=0;
+let pickupTimer=0;
+
+let notice="";
+let noticeTimer=0;
+
+const difficultyInfo={
+  easy:{name:"EASY", label:"เล่นง่าย", desc:"ศัตรูช้าลง • บอสเบาลง • เหรียญเก็บง่าย"},
+  normal:{name:"NORMAL", label:"ปกติ", desc:"ศัตรูเร็วขึ้น • บอสโหดขึ้น • เกมท้าทายกว่า"}
+};
+
+
+/* =========================================================
+   WEAPONS
+========================================================= */
+
+const guns={
+
+  pistol:{
+    name:"PISTOL",
+    damage:difficulty==="easy"?14:18,
+    rate:16,
+    bulletSpeed:13,
+    shots:1,
+    spread:.02,
+    cost:0,
+    color:"#fff"
+  },
+
+  shotgun:{
+    name:"SHOTGUN",
+    damage:difficulty==="easy"?15:12,
+    rate:32,
+    bulletSpeed:11,
+    shots:6,
+    spread:.28,
+    cost:60,
+    color:"#ffd166"
+  },
+
+  rifle:{
+    name:"RIFLE",
+    damage:difficulty==="easy"?13:10,
+    rate:6,
+    bulletSpeed:15,
+    shots:1,
+    spread:.025,
+    cost:130,
+    color:"#65e6ff"
+  },
+
+  rocket:{
+    name:"ROCKET",
+    damage:difficulty==="easy"?60:48,
+    rate:48,
+    bulletSpeed:8,
+    shots:1,
+    spread:0,
+    cost:220,
+    color:"#ff7043"
+  }
+
+};
+
+
+/* =========================================================
+   PLAYER
+========================================================= */
+
+const player={
+  x:130,
+  y:G-75,
+  w:48,
+  h:75,
+  vy:0,
+  jump:false,
+  inv:0,
+  rapid:0,
+  boost:0,
+  shield:0,
+  shootTimer:0
+};
+
+
+/* =========================================================
+   MISSIONS
+========================================================= */
+
+const missions=[
+  {
+    text:"ฆ่าซอมบี้ 10 ตัว",
+    target:10,
+    reward:30,
+    done:false,
+    get:()=>kills
+  },
+  {
+    text:"เก็บเหรียญ 20 เหรียญ",
+    target:20,
+    reward:50,
+    done:false,
+    get:()=>coins
+  },
+  {
+    text:"ทำคะแนน 500",
+    target:500,
+    reward:70,
+    done:false,
+    get:()=>Math.floor(score)
+  },
+  {
+    text:"ฆ่าบอส 1 ตัว",
+    target:1,
+    reward:100,
+    done:false,
+    get:()=>bossKills
+  }
+];
+
+
+/* =========================================================
+   RESET
+========================================================= */
+
+function resetGame(){
+
+  score=0;
+  coins=0;
+  kills=0;
+  bossKills=0;
+  level=1;
+
+  hp=maxhp=100;
+
+  speed=difficulty==="easy"?3.2:4;
+  time=0;
+
+  combo=0;
+  comboTimer=0;
+  bestCombo=0;
+
+  skillCooldown=0;
+
+  boss=null;
+
+  zombies=[];
+  obstacles=[];
+  bullets=[];
+  enemyBullets=[];
+  pickups=[];
+  effects=[];
+
+  zombieTimer=difficulty==="easy"?80:50;
+  obstacleTimer=difficulty==="easy"?120:100;
+  pickupTimer=difficulty==="easy"?60:80;
+
+  shop=false;
+  paused=false;
+  gameOver=false;
+
+  weapon="pistol";
+
+  player.x=130;
+  player.y=G-player.h;
+  player.vy=0;
+  player.jump=false;
+  player.inv=0;
+  player.rapid=0;
+  player.boost=0;
+  player.shield=0;
+  player.shootTimer=0;
+
+  missions.forEach(m=>m.done=false);
+
+  notice="เอาตัวรอดให้ได้!";
+  noticeTimer=120;
+}
+
+
+/* =========================================================
+   START MENU
+========================================================= */
+
+function drawMenu(){
+
+  /* background */
+  const grd=ctx.createLinearGradient(0,0,0,H);
+  grd.addColorStop(0,"#050914");
+  grd.addColorStop(1,"#15101c");
+
+  ctx.fillStyle=grd;
+  ctx.fillRect(0,0,W,H);
+
+  /* moon */
+  ctx.fillStyle="#e9f4ff";
+  ctx.beginPath();
+  ctx.arc(790,115,55,0,Math.PI*2);
+  ctx.fill();
+
+  ctx.fillStyle="#0d1320";
+  ctx.beginPath();
+  ctx.arc(812,98,52,0,Math.PI*2);
+  ctx.fill();
+
+  /* city */
+  ctx.fillStyle="#0a0e18";
+
+  for(let x=0;x<W;x+=55){
+    let bh=rndi(60,170);
+    ctx.fillRect(x,G-bh,45,bh);
+
+    for(let y=G-bh+15;y<G-10;y+=22){
+      if(Math.random()<.25){
+        ctx.fillStyle="#ffd166";
+        ctx.fillRect(x+10,y,7,8);
+        ctx.fillStyle="#0a0e18";
+      }
+    }
+  }
+
+  /* title */
+  ctx.textAlign="center";
+
+  ctx.fillStyle="#ff4545";
+  ctx.font="bold 76px Arial";
+  ctx.shadowColor="#ff0000";
+  ctx.shadowBlur=25;
+  ctx.fillText("สู้เว้ย!",W/2,115);
+
+  ctx.shadowBlur=0;
+
+  ctx.fillStyle="#fff";
+  ctx.font="bold 24px Arial";
+  ctx.fillText("ZOMBIE RUNNER",W/2,150);
+
+  /* character showcase */
+  drawPlayer(W/2-24,G-145);
+
+  /* info box */
+  ctx.fillStyle="rgba(0,0,0,.55)";
+  roundRect(270,300,460,185,20);
+  ctx.fill();
+
+  ctx.strokeStyle="#334866";
+  ctx.lineWidth=2;
+  ctx.stroke();
+
+  ctx.fillStyle="#fff";
+  ctx.font="bold 28px Arial";
+  ctx.fillText("พร้อมลุยหรือยัง?",W/2,335);
+
+  ctx.fillStyle=difficulty==="easy"?"#6ee7ff":"#ffd166";
+  ctx.font="bold 23px Arial";
+  ctx.fillText(`โหมด: ${difficultyInfo[difficulty].label}`,W/2,372);
+
+  ctx.fillStyle="#aaa";
+  ctx.font="16px Arial";
+  ctx.fillText("กด 1 = EASY    กด 2 = NORMAL",W/2,398);
+
+  ctx.fillStyle="#6ee7ff";
+  ctx.font="bold 23px Arial";
+  ctx.fillText("กด ENTER เพื่อเริ่มเกม",W/2,430);
+
+  ctx.fillStyle="#bbb";
+  ctx.font="17px Arial";
+  ctx.fillText("A / D หรือ ← / → = เดิน   W / ↑ = กระโดด   SPACE = ยิง",W/2,458);
+  ctx.fillText("E = สกิล   B = ร้านค้า   P = หยุดเกม",W/2,483);
+
+  ctx.textAlign="left";
+}
+
+
+/* =========================================================
+   PLAYER DRAW
+========================================================= */
+
+function drawPlayer(x=player.x,y=player.y){
+
+  const px=x;
+  const py=y;
+
+  ctx.save();
+
+  /* shield */
+  if(player.shield>0){
+    ctx.strokeStyle="rgba(80,220,255,.85)";
+    ctx.lineWidth=4;
+    ctx.beginPath();
+    ctx.arc(px+24,py+38,48,0,Math.PI*2);
+    ctx.stroke();
+  }
+
+  /* legs */
+  ctx.fillStyle="#171d2a";
+  ctx.fillRect(px+8,py+55,13,20);
+  ctx.fillRect(px+28,py+55,13,20);
+
+  /* boots */
+  ctx.fillStyle="#090b10";
+  ctx.fillRect(px+4,py+70,20,8);
+  ctx.fillRect(px+27,py+70,20,8);
+
+  /* body armor */
+  ctx.fillStyle="#1267a6";
+  roundRect(px+7,py+30,35,34,7);
+  ctx.fill();
+
+  ctx.strokeStyle="#6ee7ff";
+  ctx.lineWidth=2;
+  ctx.stroke();
+
+  /* armor center */
+  ctx.fillStyle="#18344d";
+  ctx.fillRect(px+19,py+36,12,21);
+
+  /* shoulder */
+  ctx.fillStyle="#1c87c9";
+  ctx.fillRect(px+2,py+34,10,17);
+  ctx.fillRect(px+37,py+34,10,17);
+
+  /* neck */
+  ctx.fillStyle="#d99a6c";
+  ctx.fillRect(px+18,py+25,13,10);
+
+  /* face */
+  ctx.fillStyle="#e7a77a";
+  ctx.beginPath();
+  ctx.arc(px+24,py+18,18,0,Math.PI*2);
+  ctx.fill();
+
+  /* hair */
+  ctx.fillStyle="#151922";
+  ctx.beginPath();
+  ctx.arc(px+24,py+13,19,Math.PI,Math.PI*2);
+  ctx.fill();
+
+  /* cap */
+  ctx.fillStyle="#101b31";
+  ctx.fillRect(px+7,py+5,35,8);
+  ctx.fillRect(px+14,py+0,23,9);
+
+  /* glasses */
+  ctx.fillStyle="#62f3ff";
+  ctx.fillRect(px+12,py+15,9,5);
+  ctx.fillRect(px+27,py+15,9,5);
+  ctx.fillRect(px+21,py+16,6,2);
+
+  /* eyes */
+  ctx.fillStyle="#00151c";
+  ctx.fillRect(px+15,py+16,4,3);
+  ctx.fillRect(px+30,py+16,4,3);
+
+  /* arms */
+  ctx.strokeStyle="#e7a77a";
+  ctx.lineWidth=7;
+  ctx.beginPath();
+  ctx.moveTo(px+9,py+38);
+  ctx.lineTo(px-2,py+48);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(px+40,py+38);
+  ctx.lineTo(px+50,py+43);
+  ctx.stroke();
+
+  /* gun */
+  ctx.fillStyle="#6f7885";
+  ctx.fillRect(px+42,py+38,27,7);
+
+  ctx.fillStyle="#202631";
+  ctx.fillRect(px+58,py+35,14,5);
+
+  ctx.fillStyle="#111";
+  ctx.fillRect(px+48,py+44,8,10);
+
+  ctx.restore();
+}
+
+
+/* =========================================================
+   DRAW HELPERS
+========================================================= */
+
+function roundRect(x,y,w,h,r){
+
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
+
+
+/* =========================================================
+   SHOOT
+========================================================= */
+
+function shoot(){
+
+  if(player.shootTimer>0) return;
+
+  const gun=guns[weapon];
+
+  player.shootTimer=player.rapid>0
+    ? Math.max(2,Math.floor(gun.rate/2))
+    : gun.rate;
+
+  for(let i=0;i<gun.shots;i++){
+
+    let ang=(Math.random()-.5)*gun.spread;
+
+    bullets.push({
+      x:player.x+65,
+      y:player.y+39,
+      vx:Math.cos(ang)*gun.bulletSpeed,
+      vy:Math.sin(ang)*gun.bulletSpeed,
+      damage:gun.damage,
+      rocket:weapon==="rocket",
+      life:100
+    });
+  }
+
+  effects.push({
+    x:player.x+72,
+    y:player.y+41,
+    type:"muzzle",
+    life:8
+  });
+}
+
+
+/* =========================================================
+   SKILL
+========================================================= */
+
+function useSkill(){
+
+  if(skillCooldown>0) return;
+
+  skillCooldown=difficulty==="easy"?300:420;
+
+  player.shield=difficulty==="easy"?210:180;
+  player.rapid=difficulty==="easy"?210:180;
+
+  for(const z of zombies){
+    z.hp-=60;
+  }
+
+  enemyBullets=[];
+
+  notice="⚡ OVERDRIVE!";
+  noticeTimer=100;
+
+  effects.push({
+    x:player.x+25,
+    y:player.y+35,
+    type:"skill",
+    life:35
+  });
+}
+
+
+/* =========================================================
+   ADD ZOMBIE
+========================================================= */
+
+function addZombie(){
+
+  const roll=Math.random();
+  let type;
+
+  if(roll<.55) type="normal";
+  else if(roll<.72) type="runner";
+  else if(roll<.85) type="flyer";
+  else if(roll<.94) type="tank";
+  else type="bomber";
+
+  let z={
+    type,
+    x:W+40,
+    y:G-65,
+    w:42,
+    h:65,
+    hp:30,
+    maxhp:30,
+    vx:0,
+    vy:0,
+    speed:1.5,
+    color:"#69b34c",
+    hit:0
+  };
+
+  if(type==="normal"){
+    z.hp=z.maxhp=(difficulty==="easy"?28+level*2:30+level*3);
+    z.speed=difficulty==="easy"?1.2+level*.03:1.6+level*.05;
+    z.color="#63c04b";
+  }
+
+  if(type==="runner"){
+    z.hp=z.maxhp=(difficulty==="easy"?18+level*2:20+level*2);
+    z.speed=difficulty==="easy"?2.3+level*.05:3.1+level*.08;
+    z.color="#d7d84e";
+  }
+
+  if(type==="tank"){
+    z.hp=z.maxhp=(difficulty==="easy"?85+level*8:100+level*10);
+    z.speed=difficulty==="easy"?.6+level*.02:.75+level*.03;
+    z.w=55;
+    z.h=82;
+    z.color="#795548";
+  }
+
+  if(type==="bomber"){
+    z.hp=z.maxhp=(difficulty==="easy"?40+level*3:45+level*4);
+    z.speed=difficulty==="easy"?.9:1.2;
+    z.color="#d65a42";
+  }
+
+  if(type==="flyer"){
+    z.hp=z.maxhp=(difficulty==="easy"?25+level*2:28+level*3);
+
+    /* ลดระดับให้ยิงง่ายขึ้น */
+    z.y=difficulty==="easy"?rnd(G-165,G-75):rnd(G-210,G-90);
+
+    z.w=48;
+    z.h=38;
+    z.speed=difficulty==="easy"?1.6+level*.03:2.1+level*.05;
+    z.color="#8e6ac8";
+  }
+
+  zombies.push(z);
+}
+
+
+/* =========================================================
+   ADD OBSTACLE
+========================================================= */
+
+function addObstacle(){
+
+  obstacles.push({
+    x:W+40,
+    y:G-rndi(35,75),
+    w:rndi(25,55),
+    h:rndi(35,75)
+  });
+}
+
+
+/* =========================================================
+   ADD PICKUP
+========================================================= */
+
+function addPickup(){
+
+  const roll=Math.random();
+
+  let type;
+
+  if(roll<(difficulty==="easy"?0.65:0.55)){
+    type="coin";
+  }else if(roll<(difficulty==="easy"?0.77:0.68)){
+    type="heal";
+  }else if(roll<(difficulty==="easy"?0.87:0.80)){
+    type="rapid";
+  }else if(roll<(difficulty==="easy"?0.94:0.91)){
+    type="boost";
+  }else{
+    type="shield";
+  }
+
+  let y;
+
+  if(type==="coin"){
+    /* เหรียญส่วนใหญ่ลงพื้น */
+    y=G-55;
+  }else{
+    y=Math.random()<.7
+      ? G-55
+      : rnd(G-170,G-90);
+  }
+
+  pickups.push({
+    x:W+30,
+    y,
+    w:30,
+    h:30,
+    type,
+    rot:0
+  });
+}
+
+
+/* =========================================================
+   BOSS
+========================================================= */
+
+function addBoss(){
+
+  zombies=[];
+  obstacles=[];
+  enemyBullets=[];
+
+  const hpBoss=difficulty==="easy"?55+level*15:70+level*22;
+
+  boss={
+    x:W+120,
+    y:G-175,
+    w:135,
+    h:175,
+
+    hp:hpBoss,
+    maxhp:hpBoss,
+
+    attackTimer:difficulty==="easy"?100:80,
+    summonTimer:difficulty==="easy"?210:170,
+    throwTimer:difficulty==="easy"?220:130,
+    chargeTimer:280,
+
+    phase:1,
+    hit:0
+  };
+
+  notice="⚠ BOSS มาแล้ว!";
+  noticeTimer=150;
+}
+
+
+/* =========================================================
+   BOSS DRAW
+========================================================= */
+
+function drawBoss(){
+
+  if(!boss) return;
+
+  const b=boss;
+
+  /* shadow */
+  ctx.fillStyle="rgba(0,0,0,.4)";
+  ctx.beginPath();
+  ctx.ellipse(b.x+b.w/2,G+5,80,18,0,0,Math.PI*2);
+  ctx.fill();
+
+  /* cape */
+  ctx.fillStyle="#241536";
+  ctx.beginPath();
+  ctx.moveTo(b.x+25,b.y+45);
+  ctx.lineTo(b.x-5,b.y+b.h);
+  ctx.lineTo(b.x+b.w+10,b.y+b.h);
+  ctx.lineTo(b.x+b.w-25,b.y+45);
+  ctx.closePath();
+  ctx.fill();
+
+  /* body */
+  ctx.fillStyle=b.phase===2?"#b51f35":"#70236e";
+  roundRect(b.x+20,b.y+42,b.w-40,b.h-45,15);
+  ctx.fill();
+
+  /* armor */
+  ctx.fillStyle="#3c4254";
+  ctx.fillRect(b.x+35,b.y+75,b.w-70,60);
+
+  ctx.strokeStyle="#ff4b61";
+  ctx.lineWidth=3;
+  ctx.strokeRect(b.x+42,b.y+85,b.w-84,40);
+
+  /* head */
+  ctx.fillStyle="#8f5b4a";
+  ctx.beginPath();
+  ctx.arc(b.x+b.w/2,b.y+34,31,0,Math.PI*2);
+  ctx.fill();
+
+  /* horns */
+  ctx.fillStyle="#dedede";
+
+  ctx.beginPath();
+  ctx.moveTo(b.x+37,b.y+12);
+  ctx.lineTo(b.x+25,b.y-15);
+  ctx.lineTo(b.x+49,b.y+7);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(b.x+b.w-37,b.y+12);
+  ctx.lineTo(b.x+b.w-25,b.y-15);
+  ctx.lineTo(b.x+b.w-49,b.y+7);
+  ctx.closePath();
+  ctx.fill();
+
+  /* eyes */
+  ctx.fillStyle="#ff334f";
+  ctx.fillRect(b.x+42,b.y+28,13,7);
+  ctx.fillRect(b.x+b.w-55,b.y+28,13,7);
+
+  /* arms */
+  ctx.strokeStyle="#8f5b4a";
+  ctx.lineWidth=18;
+
+  ctx.beginPath();
+  ctx.moveTo(b.x+28,b.y+85);
+  ctx.lineTo(b.x-5,b.y+125);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(b.x+b.w-28,b.y+85);
+  ctx.lineTo(b.x+b.w+5,b.y+125);
+  ctx.stroke();
+
+  /* hp bar */
+  const bw=190;
+  const bh=15;
+  const bx=b.x+b.w/2-bw/2;
+  const by=b.y-38;
+
+  ctx.fillStyle="#240b10";
+  ctx.fillRect(bx,by,bw,bh);
+
+  ctx.fillStyle="#ff334f";
+  ctx.fillRect(
+    bx,
+    by,
+    bw*Math.max(0,b.hp/b.maxhp),
+    bh
+  );
+
+  ctx.strokeStyle="#fff";
+  ctx.strokeRect(bx,by,bw,bh);
+
+  ctx.fillStyle="#fff";
+  ctx.font="bold 15px Arial";
+  ctx.textAlign="center";
+  ctx.fillText(
+    `BOSS  ${Math.ceil(b.hp)} / ${b.maxhp}`,
+    b.x+b.w/2,
+    by-7
+  );
+
+  ctx.fillStyle=b.phase===2?"#ff4d5f":"#ffca3a";
+  ctx.font="bold 17px Arial";
+  ctx.fillText(
+    b.phase===2?"PHASE 2":"PHASE 1",
+    b.x+b.w/2,
+    b.y+b.h+25
+  );
+
+  ctx.textAlign="left";
+}
+
+
+/* =========================================================
+   BOSS CRATE
+========================================================= */
+
+function throwCrate(){
+
+  if(!boss) return;
+
+  const sx=boss.x;
+  const sy=boss.y+90;
+
+  const tx=player.x;
+  const ty=player.y+35;
+
+  const dx=tx-sx;
+  const dy=ty-sy;
+  const len=Math.hypot(dx,dy)||1;
+
+  enemyBullets.push({
+    x:sx,
+    y:sy,
+    vx:dx/len*(difficulty==="easy"?3.5:5),
+    vy:dy/len*(difficulty==="easy"?3.5:5)-(difficulty==="easy"?4:5),
+    w:34,
+    h:34,
+    damage:14,
+    crate:true,
+    gravity:difficulty==="easy"?.12:.15,
+    rot:0,
+    life:180
+  });
+}
+
+
+/* =========================================================
+   UPDATE
+========================================================= */
+
+function update(){
+
+  if(!started || paused || gameOver || shop) return;
+
+  time++;
+
+  if(noticeTimer>0) noticeTimer--;
+
+  if(player.inv>0) player.inv--;
+  if(player.rapid>0) player.rapid--;
+  if(player.boost>0) player.boost--;
+  if(player.shield>0) player.shield--;
+  if(skillCooldown>0) skillCooldown--;
+
+  if(player.shootTimer>0) player.shootTimer--;
+
+  if(comboTimer>0){
+    comboTimer--;
+  }else{
+    combo=0;
+  }
+
+  /* movement */
+
+  let move=0;
+
+  if(keys["a"]||keys["arrowleft"]) move=-1;
+  if(keys["d"]||keys["arrowright"]) move=1;
+
+  player.x+=move*(player.boost>0?8:5);
+
+  player.x=clamp(player.x,20,W-120);
+
+  if(
+    (keys["w"]||keys["arrowup"]) &&
+    !player.jump
+  ){
+    player.vy=-12;
+    player.jump=true;
+  }
+
+  player.vy+=.55;
+  player.y+=player.vy;
+
+  if(player.y>=G-player.h){
+    player.y=G-player.h;
+    player.vy=0;
+    player.jump=false;
+  }
+
+  /* shooting */
+
+  if(keys[" "] || keys["space"]){
+    shoot();
+  }
+
+  /* difficulty */
+
+  speed=difficulty==="easy"?3.2+level*.15+Math.min(2.5,time/3500):4+level*.25+Math.min(4,time/2500);
+
+  /* boss */
+
+  if(boss){
+    updateBoss();
+  }else{
+
+    zombieTimer--;
+
+    if(zombieTimer<=0){
+
+      addZombie();
+
+      zombieTimer=Math.max(
+        difficulty==="easy"?55:35,
+        (difficulty==="easy"?125-level*2-rnd(0,20):100-level*3-rnd(0,25))
+      );
+    }
+
+    obstacleTimer--;
+
+    if(obstacleTimer<=0){
+
+      addObstacle();
+
+      obstacleTimer=difficulty==="easy"?rndi(130,210):rndi(100,190);
+    }
+
+    pickupTimer--;
+
+    if(pickupTimer<=0){
+
+      addPickup();
+
+      pickupTimer=difficulty==="easy"?rndi(55,100):rndi(90,160);
+    }
+  }
+
+  updateZombies();
+  updateObstacles();
+  updateBullets();
+  updateEnemyBullets();
+  updatePickups();
+  updateEffects();
+
+  score+=.035*level;
+
+  /* boss every 500 */
+  if(
+    !boss &&
+    score>=500 &&
+    Math.floor(score/500)>bossKills
+  ){
+    addBoss();
+  }
+
+  checkMissions();
+}
+
+
+/* =========================================================
+   UPDATE BOSS
+========================================================= */
+
+function updateBoss(){
+
+  const b=boss;
+
+  if(b.x>650){
+    b.x-=1.8;
+  }
+
+  if(b.hit>0) b.hit--;
+
+  /* phase 2 */
+  if(b.hp<=b.maxhp*(difficulty==="easy"?.45:.5) && b.phase===1){
+
+    b.phase=2;
+
+    notice="🔥 BOSS PHASE 2!";
+    noticeTimer=150;
+
+    effects.push({
+      x:b.x+b.w/2,
+      y:b.y+80,
+      type:"boss",
+      life:50
+    });
+  }
+
+  /* targeted shots */
+
+  b.attackTimer--;
+
+  if(b.attackTimer<=0){
+
+    b.attackTimer=difficulty==="easy"?(b.phase===2?55:90):(b.phase===2?38:65);
+
+    const sx=b.x;
+    const sy=b.y+90;
+
+    const tx=player.x+20;
+    const ty=player.y+30;
+
+    const dx=tx-sx;
+    const dy=ty-sy;
+
+    const len=Math.hypot(dx,dy)||1;
+
+    enemyBullets.push({
+      x:sx,
+      y:sy,
+      vx:dx/len*(difficulty==="easy"?(b.phase===2?5.5:4):(b.phase===2?7:5)),
+      vy:dy/len*(difficulty==="easy"?(b.phase===2?5.5:4):(b.phase===2?7:5)),
+      w:12,
+      h:12,
+      damage:difficulty==="easy"?(b.phase===2?10:7):(b.phase===2?12:9),
+      crate:false,
+      life:150
+    });
+
+    if(b.phase===2){
+
+      enemyBullets.push({
+        x:sx,
+        y:sy,
+        vx:dx/len*5+2,
+        vy:dy/len*5-2,
+        w:10,
+        h:10,
+        damage:difficulty==="easy"?13:10,
+        crate:false,
+        life:150
+      });
+
+      enemyBullets.push({
+        x:sx,
+        y:sy,
+        vx:dx/len*5-2,
+        vy:dy/len*5+2,
+        w:10,
+        h:10,
+        damage:difficulty==="easy"?13:10,
+        crate:false,
+        life:150
+      });
+    }
+  }
+
+  /* throw crate */
+
+  b.throwTimer--;
+
+  if(b.throwTimer<=0){
+
+    b.throwTimer=b.phase===2?105:180;
+
+    throwCrate();
+  }
+
+  /* summon */
+
+  b.summonTimer--;
+
+  if(b.summonTimer<=0){
+
+    b.summonTimer=b.phase===2?110:190;
+
+    addZombie();
+
+    if(b.phase===2){
+      addZombie();
+      addZombie();
+    }
+  }
+
+  /* charge */
+  if(b.phase===2){
+
+    b.chargeTimer--;
+
+    if(b.chargeTimer<=0){
+
+      b.chargeTimer=330;
+
+      b.x-=90;
+
+      enemyBullets.push({
+        x:b.x,
+        y:b.y+100,
+        vx:-7,
+        vy:0,
+        w:45,
+        h:25,
+        damage:difficulty==="easy"?18:25,
+        crate:false,
+        life:70,
+        charge:true
+      });
+    }
+  }
+
+  /* boss touches player */
+
+  if(
+    hitbox(
+      player.x,
+      player.y,
+      player.w,
+      player.h,
+      b.x,
+      b.y,
+      b.w,
+      b.h
+    )
+  ){
+    hurtPlayer(25);
+  }
+}
+
+
+/* =========================================================
+   UPDATE ZOMBIES
+========================================================= */
+
+function updateZombies(){
+
+  for(let i=zombies.length-1;i>=0;i--){
+
+    const z=zombies[i];
+
+    z.x-=speed*z.speed;
+
+    if(z.type==="flyer"){
+      z.y+=Math.sin(time/20+z.x)*.8;
+      z.y=clamp(z.y,G-225,G-65);
+    }
+
+    /* bomber */
+    if(
+      z.type==="bomber" &&
+      dist(z.x,z.y,player.x,player.y)<120
+    ){
+
+      hurtPlayer(difficulty==="easy"?24:30);
+
+      effects.push({
+        x:z.x,
+        y:z.y,
+        type:"boom",
+        life:30
+      });
+
+      zombies.splice(i,1);
+      continue;
+    }
+
+    if(
+      hitbox(
+        player.x,
+        player.y,
+        player.w,
+        player.h,
+        z.x,
+        z.y,
+        z.w,
+        z.h
+      )
+    ){
+
+      hurtPlayer(
+        z.type==="tank"?(difficulty==="easy"?20:25):
+        z.type==="runner"?(difficulty==="easy"?11:14):
+        (difficulty==="easy"?8:10)
+      );
+    }
+
+    if(z.x+z.w<0){
+      zombies.splice(i,1);
+    }
+  }
+}
+
+
+/* =========================================================
+   UPDATE OBSTACLES
+========================================================= */
+
+function updateObstacles(){
+
+  for(let i=obstacles.length-1;i>=0;i--){
+
+    const o=obstacles[i];
+
+    o.x-=speed;
+
+    if(
+      hitbox(
+        player.x,
+        player.y,
+        player.w,
+        player.h,
+        o.x,o.y,o.w,o.h
+      )
+    ){
+
+      hurtPlayer(12);
+
+      if(player.boost<=0){
+        player.x-=15;
+      }
+    }
+
+    if(o.x+o.w<0){
+      obstacles.splice(i,1);
+    }
+  }
+}
+
+
+/* =========================================================
+   UPDATE BULLETS
+========================================================= */
+
+function updateBullets(){
+
+  for(let i=bullets.length-1;i>=0;i--){
+
+    const b=bullets[i];
+
+    b.x+=b.vx;
+    b.y+=b.vy;
+    b.life--;
+
+    if(
+      b.rocket
+    ){
+      effects.push({
+        x:b.x,
+        y:b.y,
+        type:"smoke",
+        life:5
+      });
+    }
+
+    let remove=false;
+
+    /* zombie hit */
+
+    for(let j=zombies.length-1;j>=0;j--){
+
+      const z=zombies[j];
+
+      if(
+        circleRect(
+          b.x,b.y,
+          b.rocket?12:5,
+          z.x,z.y,z.w,z.h
+        )
+      ){
+
+        z.hp-=b.damage;
+
+        effects.push({
+          x:b.x,
+          y:b.y,
+          type:"hit",
+          life:8
+        });
+
+        remove=true;
+
+        if(z.hp<=0){
+
+          kills++;
+
+          combo++;
+          comboTimer=100;
+
+          bestCombo=Math.max(bestCombo,combo);
+
+          score+=
+            z.type==="tank"?35:
+            z.type==="bomber"?25:
+            z.type==="flyer"?20:
+            z.type==="runner"?15:
+            10;
+
+          if(Math.random()<(difficulty==="easy"?.55:.38)){
+            spawnCoin(z.x,z.y);
+          }
+
+          if(z.type==="bomber"){
+            effects.push({
+              x:z.x,
+              y:z.y,
+              type:"boom",
+              life:30
+            });
+          }
+
+          zombies.splice(j,1);
+        }
+
+        break;
+      }
+    }
+
+    /* boss hit */
+
+    if(
+      !remove &&
+      boss &&
+      circleRect(
+        b.x,b.y,
+        b.rocket?12:5,
+        boss.x,boss.y,boss.w,boss.h
+      )
+    ){
+
+      boss.hp-=b.damage;
+
+      boss.hit=5;
+
+      effects.push({
+        x:b.x,
+        y:b.y,
+        type:"hit",
+        life:10
+      });
+
+      remove=true;
+
+      if(b.rocket){
+
+        effects.push({
+          x:b.x,
+          y:b.y,
+          type:"boom",
+          life:30
+        });
+      }
+
+      if(boss.hp<=0){
+
+        score+=100;
+        coins+=50;
+        bossKills++;
+        level++;
+
+        notice="💀 BOSS ถูกจัดการ!";
+        noticeTimer=150;
+
+        effects.push({
+          x:boss.x+boss.w/2,
+          y:boss.y+80,
+          type:"boss",
+          life:70
+        });
+
+        boss=null;
+
+        zombies=[];
+        enemyBullets=[];
+      }
+    }
+
+    if(
+      remove ||
+      b.life<=0 ||
+      b.x>W+50 ||
+      b.y<-50 ||
+      b.y>H+50
+    ){
+      bullets.splice(i,1);
+    }
+  }
+}
+
+
+/* =========================================================
+   UPDATE ENEMY BULLETS
+========================================================= */
+
+function updateEnemyBullets(){
+
+  for(let i=enemyBullets.length-1;i>=0;i--){
+
+    const b=enemyBullets[i];
+
+    b.x+=b.vx;
+    b.y+=b.vy;
+
+    if(b.crate){
+      b.vy+=b.gravity;
+      b.rot+=.15;
+    }
+
+    b.life--;
+
+    if(
+      circleRect(
+        b.x,b.y,
+        b.crate?18:7,
+        player.x,
+        player.y,
+        player.w,
+        player.h
+      )
+    ){
+
+      hurtPlayer(b.damage);
+
+      effects.push({
+        x:b.x,
+        y:b.y,
+        type:b.crate?"boom":"hit",
+        life:b.crate?25:8
+      });
+
+      enemyBullets.splice(i,1);
+      continue;
+    }
+
+    if(
+      b.life<=0 ||
+      b.x<-100 ||
+      b.x>W+100 ||
+      b.y>H+100
+    ){
+      enemyBullets.splice(i,1);
+    }
+  }
+}
+
+
+/* =========================================================
+   UPDATE PICKUPS
+========================================================= */
+
+function updatePickups(){
+
+  for(let i=pickups.length-1;i>=0;i--){
+
+    const p=pickups[i];
+
+    p.x-=speed;
+    p.rot+=.05;
+
+    /* coin has larger pickup radius */
+
+    const radius=p.type==="coin"?38:28;
+
+    if(
+      dist(
+        player.x+player.w/2,
+        player.y+player.h/2,
+        p.x+p.w/2,
+        p.y+p.h/2
+      )<radius
+    ){
+
+      collectPickup(p);
+
+      pickups.splice(i,1);
+      continue;
+    }
+
+    if(p.x+p.w<0){
+      pickups.splice(i,1);
+    }
+  }
+}
+
+
+/* =========================================================
+   SPAWN COIN
+========================================================= */
+
+function spawnCoin(x,y){
+
+  pickups.push({
+    x,
+    y:G-55,
+    w:30,
+    h:30,
+    type:"coin",
+    rot:0
+  });
+}
+
+
+/* =========================================================
+   COLLECT PICKUP
+========================================================= */
+
+function collectPickup(p){
+
+  if(p.type==="coin"){
+
+    coins++;
+    score+=5;
+
+    notice="+ 🪙 COIN";
+    noticeTimer=35;
+  }
+
+  if(p.type==="heal"){
+
+    hp=clamp(hp+30,0,maxhp);
+
+    notice="+ HP";
+    noticeTimer=40;
+  }
+
+  if(p.type==="rapid"){
+
+    player.rapid=400;
+
+    notice="RAPID FIRE!";
+    noticeTimer=60;
+  }
+
+  if(p.type==="boost"){
+
+    player.boost=400;
+
+    notice="SPEED BOOST!";
+    noticeTimer=60;
+  }
+
+  if(p.type==="shield"){
+
+    player.shield=350;
+
+    notice="SHIELD!";
+    noticeTimer=60;
+  }
+
+  effects.push({
+    x:p.x,
+    y:p.y,
+    type:"pickup",
+    life:20
+  });
+}
+
+
+/* =========================================================
+   UPDATE EFFECTS
+========================================================= */
+
+function updateEffects(){
+
+  for(let i=effects.length-1;i>=0;i--){
+
+    effects[i].life--;
+
+    if(effects[i].life<=0){
+      effects.splice(i,1);
+    }
+  }
+}
+
+
+/* =========================================================
+   DAMAGE PLAYER
+========================================================= */
+
+function hurtPlayer(dmg){
+
+  if(player.inv>0) return;
+
+  if(player.shield>0){
+
+    player.inv=15;
+
+    return;
+  }
+
+  hp-=dmg;
+  player.inv=45;
+
+  effects.push({
+    x:player.x+25,
+    y:player.y+35,
+    type:"hurt",
+    life:15
+  });
+
+  if(hp<=0){
+
+    hp=0;
+    gameOver=true;
+
+    highScore=Math.max(
+      highScore,
+      Math.floor(score)
+    );
+
+    localStorage.setItem(
+      "suwoei_highscore",
+      highScore
+    );
+  }
+}
+
+
+/* =========================================================
+   HITBOX
+========================================================= */
+
+function hitbox(ax,ay,aw,ah,bx,by,bw,bh){
+
+  return(
+    ax<bx+bw &&
+    ax+aw>bx &&
+    ay<by+bh &&
+    ay+ah>by
+  );
+}
+
+function circleRect(cx,cy,r,rx,ry,rw,rh){
+
+  const x=clamp(cx,rx,rx+rw);
+  const y=clamp(cy,ry,ry+rh);
+
+  return dist(cx,cy,x,y)<r;
+}
+
+
+/* =========================================================
+   MISSIONS
+========================================================= */
+
+function checkMissions(){
+
+  missions.forEach(m=>{
+
+    if(
+      !m.done &&
+      m.get()>=m.target
+    ){
+
+      m.done=true;
+      coins+=m.reward;
+
+      notice=`MISSION สำเร็จ +${m.reward} 🪙`;
+      noticeTimer=120;
+    }
+  });
+}
+
+
+/* =========================================================
+   SHOP
+========================================================= */
+
+function buyWeapon(id){
+
+  if(owned[id]){
+
+    weapon=id;
+
+    notice=`เลือก ${guns[id].name}`;
+    noticeTimer=60;
+
+    return;
+  }
+
+  const cost=guns[id].cost;
+
+  if(coins>=cost){
+
+    coins-=cost;
+    owned[id]=true;
+    weapon=id;
+
+    notice=`ซื้อ ${guns[id].name} แล้ว!`;
+    noticeTimer=80;
+
+  }else{
+
+    notice="เหรียญไม่พอ!";
+    noticeTimer=60;
+  }
+}
+
+
+function buyHP(){
+
+  const cost=80;
+
+  if(coins>=cost){
+
+    coins-=cost;
+    maxhp+=20;
+    hp=maxhp;
+
+    notice="MAX HP +20";
+    noticeTimer=70;
+
+  }else{
+
+    notice="เหรียญไม่พอ!";
+    noticeTimer=60;
+  }
+}
+
+
+/* =========================================================
+   DRAW BACKGROUND
+========================================================= */
+
+function drawBackground(){
+
+  const night=Math.sin(time/700)>0;
+
+  const grd=ctx.createLinearGradient(0,0,0,H);
+
+  if(night){
+
+    grd.addColorStop(0,"#060a18");
+    grd.addColorStop(1,"#191329");
+
+  }else{
+
+    grd.addColorStop(0,"#182b45");
+    grd.addColorStop(1,"#3b3145");
+  }
+
+  ctx.fillStyle=grd;
+  ctx.fillRect(0,0,W,H);
+
+  /* moon */
+  ctx.fillStyle="rgba(255,255,220,.9)";
+  ctx.beginPath();
+  ctx.arc(800,95,42,0,Math.PI*2);
+  ctx.fill();
+
+  /* city */
+  ctx.fillStyle="rgba(5,8,15,.65)";
+
+  for(let x=0;x<W;x+=70){
+
+    const h=80+(x*13)%100;
+
+    ctx.fillRect(
+      x,
+      G-h,
+      55,
+      h
+    );
+  }
+
+  /* road */
+  ctx.fillStyle="#171b22";
+  ctx.fillRect(0,G,W,H-G);
+
+  /* road line */
+  ctx.fillStyle="#4a4d52";
+
+  for(let x=0;x<W;x+=100){
+
+    ctx.fillRect(
+      x-(time*speed%100),
+      G+35,
+      55,
+      6
+    );
+  }
+
+  /* ground */
+  ctx.fillStyle="#222";
+  ctx.fillRect(0,G-2,W,5);
+}
+
+
+/* =========================================================
+   DRAW OBSTACLES
+========================================================= */
+
+function drawObstacles(){
+
+  for(const o of obstacles){
+
+    ctx.fillStyle="#515864";
+    ctx.fillRect(o.x,o.y,o.w,o.h);
+
+    ctx.fillStyle="#292e38";
+    ctx.fillRect(
+      o.x+5,
+      o.y+5,
+      o.w-10,
+      7
+    );
+
+    ctx.strokeStyle="#111";
+    ctx.strokeRect(o.x,o.y,o.w,o.h);
+  }
+}
+
+
+/* =========================================================
+   DRAW ZOMBIES
+========================================================= */
+
+function drawZombies(){
+
+  for(const z of zombies){
+
+    ctx.save();
+
+    if(z.type==="flyer"){
+
+      /* wings */
+      ctx.fillStyle="#6e4fa5";
+
+      ctx.beginPath();
+      ctx.moveTo(z.x+20,z.y+15);
+      ctx.lineTo(z.x-12,z.y);
+      ctx.lineTo(z.x+8,z.y+28);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.moveTo(z.x+28,z.y+15);
+      ctx.lineTo(z.x+60,z.y);
+      ctx.lineTo(z.x+40,z.y+28);
+      ctx.closePath();
+      ctx.fill();
+
+      /* body */
+      ctx.fillStyle=z.color;
+      ctx.beginPath();
+      ctx.ellipse(
+        z.x+24,
+        z.y+20,
+        18,
+        15,
+        0,
+        0,
+        Math.PI*2
+      );
+      ctx.fill();
+
+      ctx.fillStyle="#ff334f";
+      ctx.fillRect(z.x+13,z.y+15,6,4);
+      ctx.fillRect(z.x+29,z.y+15,6,4);
+
+    }else{
+
+      /* body */
+      ctx.fillStyle=z.color;
+
+      roundRect(
+        z.x,
+        z.y+20,
+        z.w,
+        z.h-20,
+        8
+      );
+
+      ctx.fill();
+
+      /* head */
+      ctx.fillStyle="#8fbc62";
+
+      ctx.beginPath();
+      ctx.arc(
+        z.x+z.w/2,
+        z.y+18,
+        z.w*.34,
+        0,
+        Math.PI*2
+      );
+
+      ctx.fill();
+
+      /* eyes */
+      ctx.fillStyle="#ff3c3c";
+
+      ctx.fillRect(
+        z.x+z.w*.28,
+        z.y+13,
+        6,
+        5
+      );
+
+      ctx.fillRect(
+        z.x+z.w*.58,
+        z.y+13,
+        6,
+        5
+      );
+
+      /* mouth */
+      ctx.fillStyle="#1b1b1b";
+
+      ctx.fillRect(
+        z.x+z.w*.32,
+        z.y+29,
+        z.w*.36,
+        5
+      );
+
+      /* arms */
+      ctx.strokeStyle=z.color;
+      ctx.lineWidth=7;
+
+      ctx.beginPath();
+      ctx.moveTo(z.x+8,z.y+38);
+      ctx.lineTo(z.x-8,z.y+53);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(z.x+z.w-8,z.y+38);
+      ctx.lineTo(z.x+z.w+8,z.y+53);
+      ctx.stroke();
+    }
+
+    /* HP */
+    if(z.hp<z.maxhp){
+
+      ctx.fillStyle="#250c0c";
+      ctx.fillRect(z.x,z.y-8,z.w,5);
+
+      ctx.fillStyle="#54d45c";
+      ctx.fillRect(
+        z.x,
+        z.y-8,
+        z.w*Math.max(0,z.hp/z.maxhp),
+        5
+      );
+    }
+
+    ctx.restore();
+  }
+}
+
+
+/* =========================================================
+   DRAW PICKUPS
+========================================================= */
+
+function drawPickups(){
+
+  for(const p of pickups){
+
+    ctx.save();
+
+    ctx.translate(
+      p.x+p.w/2,
+      p.y+p.h/2
+    );
+
+    ctx.rotate(Math.sin(p.rot)*.15);
+
+    if(p.type==="coin"){
+
+      ctx.fillStyle="#ffd23f";
+      ctx.beginPath();
+      ctx.arc(0,0,15,0,Math.PI*2);
+      ctx.fill();
+
+      ctx.strokeStyle="#fff1a8";
+      ctx.lineWidth=3;
+      ctx.stroke();
+
+      ctx.fillStyle="#9b6800";
+      ctx.font="bold 16px Arial";
+      ctx.textAlign="center";
+      ctx.fillText("$",0,6);
+
+    }else{
+
+      const colors={
+        heal:"#4ade80",
+        rapid:"#60a5fa",
+        boost:"#facc15",
+        shield:"#67e8f9"
+      };
+
+      ctx.fillStyle=colors[p.type];
+
+      ctx.beginPath();
+      ctx.arc(0,0,14,0,Math.PI*2);
+      ctx.fill();
+
+      ctx.fillStyle="#111";
+      ctx.font="bold 14px Arial";
+      ctx.textAlign="center";
+
+      const letter={
+        heal:"+",
+        rapid:"R",
+        boost:"S",
+        shield:"O"
+      }[p.type];
+
+      ctx.fillText(letter,0,5);
+    }
+
+    ctx.restore();
+  }
+}
+
+
+/* =========================================================
+   DRAW BULLETS
+========================================================= */
+
+function drawBullets(){
+
+  for(const b of bullets){
+
+    if(b.rocket){
+
+      ctx.fillStyle="#ff7143";
+      ctx.beginPath();
+      ctx.arc(b.x,b.y,9,0,Math.PI*2);
+      ctx.fill();
+
+      ctx.fillStyle="#ffd166";
+      ctx.beginPath();
+      ctx.arc(b.x-8,b.y,5,0,Math.PI*2);
+      ctx.fill();
+
+    }else{
+
+      ctx.strokeStyle=guns[weapon].color;
+      ctx.lineWidth=4;
+
+      ctx.beginPath();
+      ctx.moveTo(b.x,b.y);
+      ctx.lineTo(b.x-b.vx*.7,b.y-b.vy*.7);
+      ctx.stroke();
+    }
+  }
+}
+
+
+/* =========================================================
+   DRAW ENEMY BULLETS
+========================================================= */
+
+function drawEnemyBullets(){
+
+  for(const b of enemyBullets){
+
+    ctx.save();
+
+    if(b.crate){
+
+      ctx.translate(b.x,b.y);
+      ctx.rotate(b.rot);
+
+      ctx.fillStyle="#9b6534";
+      ctx.fillRect(-17,-17,34,34);
+
+      ctx.strokeStyle="#e3a15d";
+      ctx.lineWidth=3;
+      ctx.strokeRect(-13,-13,26,26);
+
+      ctx.strokeStyle="#5c351d";
+      ctx.beginPath();
+      ctx.moveTo(-17,-17);
+      ctx.lineTo(17,17);
+      ctx.moveTo(17,-17);
+      ctx.lineTo(-17,17);
+      ctx.stroke();
+
+    }else{
+
+      ctx.fillStyle="#ff375f";
+
+      ctx.beginPath();
+      ctx.arc(
+        b.x,
+        b.y,
+        b.charge?14:7,
+        0,
+        Math.PI*2
+      );
+
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+}
+
+
+/* =========================================================
+   DRAW EFFECTS
+========================================================= */
+
+function drawEffects(){
+
+  for(const e of effects){
+
+    const alpha=e.life/30;
+
+    ctx.save();
+    ctx.globalAlpha=Math.min(1,alpha);
+
+    if(e.type==="muzzle"){
+
+      ctx.fillStyle="#fff4a3";
+      ctx.beginPath();
+      ctx.arc(e.x,e.y,10,0,Math.PI*2);
+      ctx.fill();
+    }
+
+    if(e.type==="hit"){
+
+      ctx.strokeStyle="#fff";
+      ctx.lineWidth=3;
+
+      for(let i=0;i<4;i++){
+
+        const a=i*Math.PI/2;
+
+        ctx.beginPath();
+        ctx.moveTo(e.x,e.y);
+        ctx.lineTo(
+          e.x+Math.cos(a)*15,
+          e.y+Math.sin(a)*15
+        );
+        ctx.stroke();
+      }
+    }
+
+    if(e.type==="boom"){
+
+      ctx.strokeStyle="#ff7043";
+      ctx.lineWidth=6;
+
+      ctx.beginPath();
+      ctx.arc(
+        e.x,
+        e.y,
+        40-e.life,
+        0,
+        Math.PI*2
+      );
+
+      ctx.stroke();
+    }
+
+    if(e.type==="skill"){
+
+      ctx.strokeStyle="#6ee7ff";
+      ctx.lineWidth=5;
+
+      ctx.beginPath();
+      ctx.arc(
+        e.x,
+        e.y,
+        70-e.life,
+        0,
+        Math.PI*2
+      );
+
+      ctx.stroke();
+    }
+
+    if(e.type==="boss"){
+
+      ctx.strokeStyle="#ff334f";
+      ctx.lineWidth=8;
+
+      ctx.beginPath();
+      ctx.arc(
+        e.x,
+        e.y,
+        100-e.life,
+        0,
+        Math.PI*2
+      );
+
+      ctx.stroke();
+    }
+
+    if(e.type==="pickup"){
+
+      ctx.strokeStyle="#fff";
+      ctx.lineWidth=3;
+
+      ctx.beginPath();
+      ctx.arc(
+        e.x,
+        e.y,
+        25-e.life/2,
+        0,
+        Math.PI*2
+      );
+
+      ctx.stroke();
+    }
+
+    if(e.type==="smoke"){
+
+      ctx.fillStyle="#aaa";
+      ctx.beginPath();
+      ctx.arc(
+        e.x,
+        e.y,
+        4+Math.random()*5,
+        0,
+        Math.PI*2
+      );
+      ctx.fill();
+    }
+
+    if(e.type==="hurt"){
+
+      ctx.strokeStyle="#ff334f";
+      ctx.lineWidth=5;
+
+      ctx.strokeRect(
+        player.x-5,
+        player.y-5,
+        player.w+10,
+        player.h+10
+      );
+    }
+
+    ctx.restore();
+  }
+}
+
+
+/* =========================================================
+   HUD
+========================================================= */
+
+function drawHUD(){
+  ctx.save();
+  ctx.fillStyle=difficulty==="easy"?"#6ee7ff":"#ffd166";
+  ctx.font="bold 14px Arial";
+  ctx.fillText(`MODE: ${difficultyInfo[difficulty].name}`,W-130,22);
+  ctx.restore();
+
+
+  /* top left */
+  ctx.fillStyle="rgba(0,0,0,.55)";
+  roundRect(15,15,300,100,12);
+  ctx.fill();
+
+  ctx.fillStyle="#fff";
+  ctx.font="bold 19px Arial";
+
+  ctx.fillText(
+    `คะแนน: ${Math.floor(score)}`,
+    30,
+    42
+  );
+
+  ctx.fillText(
+    `🪙 ${coins}`,
+    30,
+    68
+  );
+
+  ctx.fillText(
+    `เลเวล: ${level}`,
+    145,
+    68
+  );
+
+  ctx.fillText(
+    `ฆ่า: ${kills}`,
+    30,
+    94
+  );
+
+  ctx.fillText(
+    `COMBO x${combo}`,
+    145,
+    94
+  );
+
+  /* HP */
+  ctx.fillStyle="#270d12";
+  ctx.fillRect(335,20,260,20);
+
+  ctx.fillStyle="#4ade80";
+  ctx.fillRect(
+    335,
+    20,
+    260*Math.max(0,hp/maxhp),
+    20
+  );
+
+  ctx.strokeStyle="#fff";
+  ctx.strokeRect(335,20,260,20);
+
+  ctx.fillStyle="#fff";
+  ctx.font="bold 14px Arial";
+  ctx.textAlign="center";
+  ctx.fillText(
+    `HP ${Math.ceil(hp)} / ${maxhp}`,
+    465,
+    35
+  );
+
+  /* weapon */
+  ctx.textAlign="left";
+  ctx.fillStyle="#fff";
+  ctx.font="bold 18px Arial";
+
+  ctx.fillText(
+    `🔫 ${guns[weapon].name}`,
+    620,
+    35
+  );
+
+  ctx.font="14px Arial";
+
+  ctx.fillText(
+    `E Skill: ${skillCooldown>0
+      ? Math.ceil(skillCooldown/60)+"s"
+      : "READY"}`,
+    620,
+    57
+  );
+
+  ctx.fillText(
+    `High Score: ${highScore}`,
+    620,
+    78
+  );
+
+  if(player.shield>0){
+    ctx.fillStyle="#6ee7ff";
+    ctx.fillText(
+      `SHIELD ${Math.ceil(player.shield/60)}s`,
+      620,
+      98
+    );
+  }
+
+  if(player.rapid>0){
+    ctx.fillStyle="#ffd166";
+    ctx.fillText(
+      `RAPID ${Math.ceil(player.rapid/60)}s`,
+      750,
+      98
+    );
+  }
+
+  /* boss warning */
+  if(boss){
+
+    ctx.fillStyle="#ff334f";
+    ctx.font="bold 26px Arial";
+    ctx.textAlign="center";
+    ctx.fillText(
+      "⚠ BOSS ⚠",
+      W/2,
+      125
+    );
+  }
+
+  /* notice */
+  if(noticeTimer>0){
+
+    ctx.fillStyle="#fff";
+    ctx.font="bold 24px Arial";
+    ctx.textAlign="center";
+
+    ctx.shadowColor="#000";
+    ctx.shadowBlur=5;
+
+    ctx.fillText(
+      notice,
+      W/2,
+      170
+    );
+
+    ctx.shadowBlur=0;
+  }
+
+  ctx.textAlign="left";
+}
+
+
+/* =========================================================
+   SHOP DRAW
+========================================================= */
+
+function drawShop(){
+
+  ctx.fillStyle="rgba(0,0,0,.86)";
+  ctx.fillRect(0,0,W,H);
+
+  ctx.fillStyle="#fff";
+  ctx.font="bold 42px Arial";
+  ctx.textAlign="center";
+  ctx.fillText("🔫 SHOP",W/2,75);
+
+  ctx.font="bold 22px Arial";
+  ctx.fillText(`🪙 เหรียญ: ${coins}`,W/2,112);
+
+  const list=[
+    ["1","pistol"],
+    ["2","shotgun"],
+    ["3","rifle"],
+    ["4","rocket"]
+  ];
+
+  list.forEach((item,i)=>{
+
+    const key=item[0];
+    const id=item[1];
+    const g=guns[id];
+
+    const y=155+i*78;
+
+    ctx.fillStyle=
+      weapon===id
+      ? "rgba(50,180,255,.3)"
+      : "rgba(255,255,255,.08)";
+
+    roundRect(250,y,500,62,12);
+    ctx.fill();
+
+    ctx.strokeStyle="#3a506b";
+    ctx.stroke();
+
+    ctx.textAlign="left";
+
+    ctx.fillStyle="#fff";
+    ctx.font="bold 20px Arial";
+
+    ctx.fillText(
+      `${key}. ${g.name}`,
+      275,
+      y+27
+    );
+
+    ctx.font="15px Arial";
+
+    ctx.fillText(
+      `Damage ${g.damage} | Shots ${g.shots} | Rate ${g.rate}`,
+      275,
+      y+49
+    );
+
+    ctx.textAlign="right";
+
+    if(owned[id]){
+
+      ctx.fillStyle=
+        weapon===id
+        ? "#6ee7ff"
+        : "#7dff8b";
+
+      ctx.font="bold 17px Arial";
+
+      ctx.fillText(
+        weapon===id?"EQUIPPED":"OWNED",
+        720,
+        y+36
+      );
+
+    }else{
+
+      ctx.fillStyle="#ffd166";
+      ctx.fillText(
+        `${g.cost} 🪙`,
+        720,
+        y+36
+      );
+    }
+  });
+
+  /* HP upgrade */
+
+  ctx.textAlign="center";
+
+  ctx.fillStyle="rgba(255,255,255,.08)";
+  roundRect(250,480,500,50,12);
+  ctx.fill();
+
+  ctx.fillStyle="#7dff8b";
+  ctx.font="bold 18px Arial";
+
+  ctx.fillText(
+    "H. เพิ่ม MAX HP +20 — ราคา 80 🪙",
+    W/2,
+    512
+  );
+
+  ctx.fillStyle="#aaa";
+  ctx.font="15px Arial";
+
+  ctx.fillText(
+    "กด B หรือ ESC เพื่อออก",
+    W/2,
+    565
+  );
+
+  ctx.textAlign="left";
+}
+
+
+/* =========================================================
+   PAUSE
+========================================================= */
+
+function drawPause(){
+
+  ctx.fillStyle="rgba(0,0,0,.7)";
+  ctx.fillRect(0,0,W,H);
+
+  ctx.fillStyle="#fff";
+  ctx.font="bold 60px Arial";
+  ctx.textAlign="center";
+  ctx.fillText("PAUSED",W/2,260);
+
+  ctx.font="22px Arial";
+  ctx.fillText("กด P เพื่อเล่นต่อ",W/2,310);
+
+  ctx.textAlign="left";
+}
+
+
+/* =========================================================
+   GAME OVER
+========================================================= */
+
+function drawGameOver(){
+
+  ctx.fillStyle="rgba(0,0,0,.78)";
+  ctx.fillRect(0,0,W,H);
+
+  ctx.textAlign="center";
+
+  ctx.fillStyle="#ff334f";
+  ctx.font="bold 64px Arial";
+  ctx.fillText("GAME OVER",W/2,220);
+
+  ctx.fillStyle="#fff";
+  ctx.font="24px Arial";
+
+  ctx.fillText(
+    `คะแนน ${Math.floor(score)}`,
+    W/2,
+    270
+  );
+
+  ctx.fillText(
+    `ฆ่า ${kills} ตัว   |   🪙 ${coins}`,
+    W/2,
+    310
+  );
+
+  ctx.fillText(
+    `Best Combo x${bestCombo}`,
+    W/2,
+    350
+  );
+
+  ctx.fillStyle="#6ee7ff";
+  ctx.font="bold 23px Arial";
+  ctx.fillText(
+    "กด R เพื่อกลับเมนู",
+    W/2,
+    415
+  );
+
+  ctx.textAlign="left";
+}
+
+
+/* =========================================================
+   DRAW
+========================================================= */
+
+function draw(){
+
+  if(!started){
+
+    drawMenu();
+    return;
+  }
+
+  drawBackground();
+  drawObstacles();
+  drawPickups();
+  drawZombies();
+
+  if(boss){
+    drawBoss();
+  }
+
+  drawBullets();
+  drawEnemyBullets();
+
+  /* player blink when damaged */
+  if(
+    player.inv===0 ||
+    Math.floor(player.inv/4)%2===0
+  ){
+    drawPlayer();
+  }
+
+  drawEffects();
+  drawHUD();
+
+  if(shop){
+    drawShop();
+  }
+
+  if(paused && !shop){
+    drawPause();
+  }
+
+  if(gameOver){
+    drawGameOver();
+  }
+}
+
+
+/* =========================================================
+   GAME LOOP
+========================================================= */
+
+function loop(){
+
+  update();
+  draw();
+
+  requestAnimationFrame(loop);
+}
+
+
+/* =========================================================
+   INITIALIZE
+========================================================= */
+
+resetGame();
+loop();
+
+</script>
+</body>
+</html>
+```
